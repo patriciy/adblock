@@ -52,6 +52,11 @@ import (
 )
 
 const (
+	Included = iota
+	Excluded = iota
+)
+
+const (
 	Exact        = iota // string to match
 	Wildcard     = iota // *
 	Separator    = iota // ^
@@ -60,6 +65,7 @@ const (
 
 	Root      = iota
 	Substring = iota // Wildcard + Exact
+	Referer   = iota //for $referer
 )
 
 func getPartName(ruleType int) string {
@@ -132,7 +138,10 @@ func ParseRule(s string) (*Rule, error) {
 		r.Parts = append(r.Parts, p)
 		s = s[2:]
 	}
+
+	opts := ""
 	if pos := strings.LastIndex(s, "$"); pos >= 0 {
+		opts = s[pos:]
 		s = s[:pos]
 	}
 
@@ -172,6 +181,19 @@ func ParseRule(s string) (*Rule, error) {
 		r.Parts = append(r.Parts, &RulePart{Type: int8(t), Value: []byte(s[pos : pos+1])})
 		s = s[pos+1:]
 	}
+
+	if len(opts) > 0 {
+		if pos := strings.Index(opts, "referer="); pos >= 0 {
+			opts = opts[pos+len("referer="):]
+			pos := strings.IndexAny(s, "$")
+			v := opts
+			if pos >= 0 {
+				v = opts[:pos]
+			}
+			r.Parts = append(r.Parts, &RulePart{Type: int8(Referer), Value: []byte(v)})
+		}
+	}
+
 	return &r, nil
 }
 
@@ -199,7 +221,8 @@ type Request struct {
 	// URL is matched against rule parts. Mandatory.
 	URL string
 	// Domain is matched against optional domain or third-party rules
-	Domain string
+	Domain  string
+	Referer string
 	// ContentType is matched against optional content rules. This
 	// information is often available only in client responses. Filters
 	// may be applied twice, once at request time, once at response time.
@@ -253,14 +276,13 @@ func ClearCaches() {
 
 func (n *RuleNode) AddRule(parts []*RulePart, id int) error {
 	if len(parts) == 0 {
-		//		n.Opts = append(n.Opts, opts)
 		return nil
 	}
 
 	// Looks for existing matching rule parts
 	part := parts[0]
 	if part.Type != Exact && part.Type != Wildcard && part.Type != Separator &&
-		part.Type != DomainAnchor && part.Type != Substring {
+		part.Type != DomainAnchor && part.Type != Substring && part.Type != Referer {
 		return fmt.Errorf("unknown rule part type: %+v", part)
 	}
 	var child *RuleNode
@@ -339,7 +361,16 @@ func (n *RuleNode) matchChildren(ctx *matchContext, url []byte, rq *Request) int
 	if len(n.Children) == 0 && n.Type != Root {
 		return -1
 	} else if len(url) == 0 && len(n.Children) > 0 {
-		return 0
+		hasRefererChild := false
+		for _, c := range n.Children {
+			if c.Type == Referer {
+				hasRefererChild = true
+				break
+			}
+		}
+		if !hasRefererChild {
+			return 0
+		}
 	}
 
 	// If there are children they have to match
@@ -460,6 +491,38 @@ func (n *RuleNode) dispatch(ctx *matchContext, url []byte, rq *Request) int {
 				if ruleId < 0 {
 					return ruleId
 				}
+			}
+		case Referer:
+			referersString := n.GetValue()
+			inverseMatch := false
+			if referersString[0] == '~' {
+				referersString = referersString[1:]
+				inverseMatch = true
+			}
+
+			if len(rq.Referer) == 0 {
+				if inverseMatch {
+					return -1
+				}
+
+				return 0
+			}
+
+			bytesReferer := []byte(rq.Referer)
+			referers := strings.Split(referersString, "|")
+			notMatched := true
+			for _, referer := range referers {
+				_, matched := matchDomainAnchor(bytesReferer, []byte(referer))
+				if matched {
+					if !inverseMatch {
+						return -1
+					}
+
+					notMatched = false
+				}
+			}
+			if notMatched && inverseMatch {
+				return -1
 			}
 		}
 		return 0
@@ -734,23 +797,27 @@ func (m *RuleMatcher) AddRule(rule *Rule, ruleId int) error {
 }
 
 // Match applies include and exclude rules on supplied request. If the
-// request is accepted, it returns true and the matching rule identifier.
+// request is accepted, it returns true and the matching rule group
 func (m *RuleMatcher) Match(rq *Request) (bool, int, error) {
 	inc := m.Includes
 	exc := m.Excludes
 
-	matched := false
-	id, err := inc.Match(rq)
+	id, err := exc.Match(rq)
 	if err != nil {
 		return false, 0, err
 	}
+	if id != 0 {
+		return true, Excluded, nil
+	}
 
-	id1 := 0
-	id1, err = exc.Match(rq)
-
-	matched = id != 0 && (err != nil || id1 == 0)
-
-	return matched, id, err
+	id, err = inc.Match(rq)
+	if err != nil {
+		return false, 0, err
+	}
+	if id != 0 {
+		return true, Included, nil
+	}
+	return false, 0, nil
 }
 
 // String returns a textual representation of the include and exclude rules,
