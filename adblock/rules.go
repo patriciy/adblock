@@ -360,18 +360,20 @@ func (n *RuleNode) matchChildren(ctx *matchContext, url []byte, rq *Request) int
 
 	if len(n.Children) == 0 && n.Type != Root {
 		return -1
-	} else if len(url) == 0 && len(n.Children) > 0 {
-		hasRefererChild := false
-		for _, c := range n.Children {
-			if c.Type == Referer {
-				hasRefererChild = true
-				break
-			}
-		}
-		if !hasRefererChild {
-			return 0
-		}
 	}
+	// } else if len(url) == 0 && len(n.Children) > 0 {
+	// 	hasRefererChild := false
+	// 	isTrailingWildCard := false
+	// 	for _, c := range n.Children {
+	// 		if c.Type == Referer {
+	// 			hasRefererChild = true
+	// 			break
+	// 		}
+	// 	}
+	// 	if !hasRefererChild {
+	// 		return 0
+	// 	}
+	// }
 
 	// If there are children they have to match
 	for _, c := range n.Children {
@@ -726,9 +728,9 @@ func (t *RuleTree) AddRule(rule *Rule, ruleId int) error {
 	if err != nil {
 		return err
 	}
-	/*rewritten = addLeadingTrailingWildcards(rewritten)
+	rewritten = addLeadingTrailingWildcards(rewritten)
 	rewritten = replaceWildcardWithSubstring(rewritten)
-	*/
+
 	if len(rewritten) == 0 {
 		return nil
 	}
