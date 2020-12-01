@@ -44,6 +44,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"regexp"
 	"runtime/debug"
@@ -330,6 +331,7 @@ type matchContext struct {
 	freq         int
 	duration     time.Duration
 	deadline     time.Time
+	matchedRule  string
 	location     *RuleNode
 	GenericBlock bool
 	isDomainRule int
@@ -350,6 +352,7 @@ func (ctx *matchContext) Continue(n *RuleNode) bool {
 		ctx.location = n
 		ctx.duration += now.Sub(ctx.deadline)
 	}
+
 	return !stop
 }
 
@@ -359,6 +362,7 @@ func (n *RuleNode) matchChildren(ctx *matchContext, url []byte, rq *Request) int
 	}
 
 	if len(n.Children) == 0 && n.Type != Root {
+		ctx.matchedRule = string(n.Value) + ctx.matchedRule
 		return -1
 	}
 	// } else if len(url) == 0 && len(n.Children) > 0 {
@@ -379,6 +383,7 @@ func (n *RuleNode) matchChildren(ctx *matchContext, url []byte, rq *Request) int
 	for _, c := range n.Children {
 		ruleId := c.dispatch(ctx, url, rq)
 		if ruleId < 0 {
+			ctx.matchedRule = string(n.Value) + ctx.matchedRule
 			return ruleId
 		}
 	}
@@ -517,6 +522,7 @@ func (n *RuleNode) dispatch(ctx *matchContext, url []byte, rq *Request) int {
 				_, matched := matchDomainAnchor(bytesReferer, []byte(referer))
 				if matched {
 					if !inverseMatch {
+						ctx.matchedRule = string(n.Value) + ctx.matchedRule
 						return -1
 					}
 
@@ -524,6 +530,7 @@ func (n *RuleNode) dispatch(ctx *matchContext, url []byte, rq *Request) int {
 				}
 			}
 			if notMatched && inverseMatch {
+				ctx.matchedRule = string(n.Value) + ctx.matchedRule
 				return -1
 			}
 		}
@@ -575,6 +582,10 @@ func (n *RuleNode) Match(url []byte, rq *Request) (int, error) {
 		}
 	}
 	id := n.dispatch(ctx, url, rq)
+
+	if len(ctx.matchedRule) > 0 {
+		log.Printf("Match rule %s", ctx.matchedRule)
+	}
 	if ctx.location != nil {
 		rule, ok := findNodePath(ctx.location, n)
 		if !ok {
